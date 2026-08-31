@@ -193,7 +193,7 @@ int main(void)
       {
         /* 长按调节背光：方向到顶/到底自动反转，可持续长按 */
         static int8_t dir = -1;
-        blk = (uint8_t)((int16_t)blk + dir * 5);
+        blk = (uint8_t)((int16_t)blk + dir * 7);
         if (blk >= 100) { blk = 100; dir = -1; }
         else if (blk <= 0) { blk = 0; dir = 1; }
         LCD_BLK(blk);
