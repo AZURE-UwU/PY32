@@ -1,0 +1,32 @@
+# 编译产物 / 中间文件（可再生成，不入库）
+*.o
+*.d
+*.dep
+*.axf
+*.elf
+*.hex
+*.map
+*.lst
+*.lnp
+*.sct
+*.crf
+*.htm
+*.build_log.htm
+Output/
+Listings/
+Objects/
+DebugConfig/
+*.uvguix.*
+*.dbgconf
+*.log
+
+# 嵌套仓库的旧 git 元数据（.git 已改名 .git.bak 保留本地历史，但不入库）
+**/.git.bak/
+
+# Windows 系统/编辑器临时文件
+Thumbs.db
+Desktop.ini
+*.user
+*.suo
+.vscode/
+.idea/

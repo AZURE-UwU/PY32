@@ -1,0 +1,165 @@
+/**
+  ******************************************************************************
+  * @file    main.c
+  * @author  MCU Application Team
+  * @Version V1.0.0
+  * @Date    2022-8-19
+  * @brief   main function
+  ******************************************************************************
+  */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "py32f030xx_ll_Start_Kit.h"
+
+/* Private define ------------------------------------------------------------*/
+/* Private variables ---------------------------------------------------------*/
+/* Private function prototypes -----------------------------------------------*/
+static void SystemClock_Config(void);
+static void APP_ConfigTIM1XOR(void);
+
+/*******************************************************************************
+**功能描述 ：执行函数
+**输入参数 ：
+**输出参数 ：
+*******************************************************************************/
+int main(void)
+{
+  /*使能TIM1时钟*/
+  LL_APB1_GRP2_EnableClock(RCC_APBENR2_TIM1EN);
+
+  /*配置系统时钟*/
+  SystemClock_Config();
+  
+  /*初始化LED*/
+  BSP_LED_Init(LED3);
+  
+  /*配置并开启TIM1 XOR模式*/
+  APP_ConfigTIM1XOR();
+  
+  while (1)
+  {
+  }
+}
+
+/*******************************************************************************
+**功能描述 ：配置TIM1 XOR模式
+**输入参数 ：
+**输出参数 ：
+*******************************************************************************/
+void APP_ConfigTIM1XOR(void)
+{
+  LL_TIM_InitTypeDef TIM1CountInit = {0};
+  LL_GPIO_InitTypeDef TIM1ChannelInit = {0};
+  
+  /*配置TIM1*/
+  /***********************************************
+  ** 输入时钟：    8000000 
+  ** 计数模式：    向上计数
+  ** 时钟预分频：  8000 
+  ** 自动重装载值：1000 
+  ** 重复计数值：  0
+  ************************************************/
+  TIM1CountInit.ClockDivision       = LL_TIM_CLOCKDIVISION_DIV1;
+  TIM1CountInit.CounterMode         = LL_TIM_COUNTERMODE_UP;
+  TIM1CountInit.Prescaler           = 8000-1;
+  TIM1CountInit.Autoreload          = 1000-1;
+  TIM1CountInit.RepetitionCounter   = 0;
+  
+  /*初始化TIM1*/
+  LL_TIM_Init(TIM1,&TIM1CountInit);
+  
+  /*使能CC中断*/
+  LL_TIM_EnableIT_CC1(TIM1);
+  NVIC_EnableIRQ(TIM1_CC_IRQn);
+  
+  /*使能XOR输入*/
+  LL_TIM_IC_EnableXORCombination(TIM1);
+  
+  /*配置CH1、CH2、CH3为输入模式*/
+  LL_TIM_IC_SetActiveInput(TIM1,LL_TIM_CHANNEL_CH1,LL_TIM_ACTIVEINPUT_DIRECTTI);
+  LL_TIM_IC_SetActiveInput(TIM1,LL_TIM_CHANNEL_CH2,LL_TIM_ACTIVEINPUT_DIRECTTI);
+  LL_TIM_IC_SetActiveInput(TIM1,LL_TIM_CHANNEL_CH3,LL_TIM_ACTIVEINPUT_DIRECTTI);
+  
+  /*映射CH1、CH2、CH3到AP8、AP9、AP10*/
+  TIM1ChannelInit.Pin       = LL_GPIO_PIN_8 | LL_GPIO_PIN_9 | LL_GPIO_PIN_10;
+  TIM1ChannelInit.Pull      = LL_GPIO_PULL_UP;
+  TIM1ChannelInit.Mode      = LL_GPIO_MODE_ALTERNATE;
+  TIM1ChannelInit.Alternate = LL_GPIO_AF_2;
+  LL_GPIO_Init(GPIOA,&TIM1ChannelInit);
+  
+  /*使能CH1、CH2、CH3*/
+  LL_TIM_CC_EnableChannel(TIM1,LL_TIM_CHANNEL_CH1);
+  LL_TIM_CC_EnableChannel(TIM1,LL_TIM_CHANNEL_CH2);
+  LL_TIM_CC_EnableChannel(TIM1,LL_TIM_CHANNEL_CH3);
+
+  /*使能TIM1计数器*/
+  LL_TIM_EnableCounter(TIM1);
+  
+}
+
+/*******************************************************************************
+**功能描述 ：TIM1 CH1捕获中断回调函数
+**输入参数 ：
+**输出参数 ：
+*******************************************************************************/
+void APP_CCCallback(void)
+{
+  /*翻转LED*/
+  BSP_LED_Toggle(LED3);
+}
+
+/*******************************************************************************
+**功能描述 ：系统时钟配置函数
+**输入参数 ：
+**输出参数 ：
+*******************************************************************************/
+void SystemClock_Config(void)
+{
+  /* 使能HSI */
+  LL_RCC_HSI_Enable();
+  while(LL_RCC_HSI_IsReady() != 1)
+  {
+  }
+
+  /* 设置 AHB 分频*/
+  LL_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_1);
+
+  /* 配置HSISYS作为系统时钟源 */
+  LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_HSISYS);
+  while(LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_HSISYS)
+  {
+  }
+
+  /* 设置 APB1 分频*/
+  LL_RCC_SetAPB1Prescaler(LL_RCC_APB1_DIV_1);
+  LL_Init1msTick(8000000);
+  
+  /* 更新系统时钟全局变量SystemCoreClock(也可以通过调用SystemCoreClockUpdate函数更新) */
+  LL_SetSystemCoreClock(8000000);
+}
+
+/*******************************************************************************
+**功能描述 ：错误执行函数
+**输入参数 ：
+**输出参数 ：
+*******************************************************************************/
+void Error_Handler(void)
+{
+  while(1)
+  {
+  }
+}
+
+#ifdef  USE_FULL_ASSERT
+/*******************************************************************************
+**功能描述 ：输出产生断言错误的源文件名及行号
+**输入参数 ：file：源文件名指针
+**输入参数 ：line：发生断言错误的行号
+**输出参数 ：
+*******************************************************************************/
+void assert_failed(uint8_t *file, uint32_t line)
+{
+}
+#endif /* USE_FULL_ASSERT */
+
+/************************ (C) COPYRIGHT Puya *****END OF FILE****/

@@ -1,0 +1,17 @@
+# Keil MDK 生成文件（IDE 可随时重新生成，不入库）
+MDK-ARM/Output/
+MDK-ARM/*.uvguix*
+MDK-ARM/DebugConfig/
+MDK-ARM/RTE/
+MDK-ARM/build_out.txt
+*.o
+*.d
+*.crf
+*.axf
+*.hex
+*.map
+*.lst
+*.lnp
+*.sct
+*.dep
+*.htm
