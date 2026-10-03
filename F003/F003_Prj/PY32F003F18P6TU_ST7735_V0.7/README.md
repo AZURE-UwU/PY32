@@ -1,100 +1,164 @@
-﻿# PY32F003F18P6TU
+# PY32F003F18P6TU_ST7735_V0.7
 
-把 **PY32F002B_ST7735**（ST7735S 0.96 寸 160x80 横屏控制板程序）移植到
-**PY32F003F18P6TU**（TSSOP20，64KB Flash / 8KB SRAM / 最高 32MHz）的完整工程，
-屏幕驱动接口与业务功能保持不变，按 F18P 核心板原理图重新做了引脚匹配。
+> F003 工程的 **当前最新版本**（V0.7，2026-09-08，注释修正在 2026-10-03）。
+> 相对 V0.6 只做**变量命名规范对齐**：`g_` 前缀严格只给跨模块共享变量，模块私有 static 一律改 `s_`。
+> 代码状态已上板实测通过。顶层速查见 [../readme.txt](../readme.txt)。
 
-**当前版本：V1.1（2026-08-29）**
+## 本版改动
 
-## 与 PY32F002B_ST7735 的差异
+### 1. 命名严格对齐（2026-09-08）
 
-| 项目 | PY32F002B_ST7735 | 本工程（PY32F003F18P6TU） |
+`g_` 前缀的含义统一成"**跨模块共享、在 global.c 定义、头文件 extern**"，模块私有的 static 改用 `s_`：
+
+| 旧名 | 新名 | 所在文件 | 性质 |
+| ---- | ---- | ---- | ---- |
+| `g_menu` | `s_menu` | app_ui.c | 菜单描述表（static const） |
+| `g_theme_opts` | `s_theme_opts` | app_ui.c | 主题选项表（static const） |
+| `g_cfg_edit` | `s_cfg_edit` | app_ui.c | 设置工作副本（static） |
+| `g_display_cb` | `s_display_cb` | st7735.c | 差分刷新回调（static） |
+
+改完后 `g_` 开头的只剩真正的共享量：
+`g_cfg`、`g_v / g_i / g_p / g_temp / g_wh / g_pwm`、`g_shunt_resistor_ohm`。
+两个文件编码不同（app_ui.c 无 BOM、st7735.c 带 BOM），改名前后都按原样保留，中文注释完好。
+
+### 2. 修正过时表述（2026-10-03）
+
+`app_ui.c` 设计说明里还写着"掉电存储（Flash）本版暂缺，Settings_Save 内留 TODO"，这是 V0.2 的原话，V0.4 起就不成立。已改为：
+
+```
+- 掉电存储（Flash）：配置整块写入内部 Flash 配置页（MAGIC+版本+CRC16），开机自动恢复。
+```
+
+同一条表述在 V0.4 / V0.5 / V0.6 三个快照里一并修正（那三个版本是冻结快照，不动版本号）；
+本目录作为当前版本，`app_ui.c` 升到 **V1.8** 并在 CHANGELOG 记录了这次修正。
+
+## 当前功能一览
+
+### 主界面（仪表盘）
+
+- **INA226**：母线电压 / 电流 / 功率，带分段线性校准与母线分压微调系数（`g_cfg.vbus_div`）；
+- **瓦时积分**：`g_wh` 按"功率 × 时间"累加；
+- **NTC 温度**：ADC 采样 → 公式换算 → **卡尔曼滤波**；
+- **风扇 PWM**：温度驱动，带**滞回状态机**防止临界温度附近抖振；
+- **背光 PWM**：TIM14_CH1 无级调光；
+- **自动关机**：电流低于 `g_cfg.auto_off_i` 并持续 `g_cfg.auto_off_min` 分钟即关机（可在菜单开关）；
+- **差分刷新**：数值未变化的位不重画，进度条只画增量段；
+- **主题**：BLACK / WHITE 两套（当前为测试主题，主题只作用于主界面）。
+
+### 设置菜单（二级界面）
+
+| 项 | 类型 | 范围 / 步长 | 说明 |
+| ---- | ---- | ---- | ---- |
+| FLIP | 勾选 | — | 屏幕方向 1/3 |
+| THEME | 选项 | BLACK / WHITE | 主题编号 |
+| AUTO OFF | 勾选 | — | 自动关机使能 |
+| BLK | 数值 | 0 ~ 100 %，步长 5 | 背光亮度 |
+| AOFF I | 数值 | 0 ~ 0.1 A，步长 0.005 | 判停电流阈值 |
+| AOFF MIN | 数值 | 1 ~ 120 min，步长 1 | 判停时长 |
+| VBUS DIV | 数值 | 0.5 ~ 3.0，步长 0.01 | INA226 母线分压微调 |
+| SAVE & EXIT | 动作 | — | 写 Flash 并退出 |
+| DISCARD | 动作 | — | 放弃并返回（不落盘） |
+
+- 菜单与数值编辑都支持**长按连跳**：前 2 秒 200ms/步，2 秒后 50ms/步，到边界钳位；
+- 编辑全部落在工作副本上，"保存并退出"才提交，"放弃并返回"天然实现整页回滚。
+
+### 掉电保存
+
+页内格式（`CFG_VERSION = 2`）：
+
+```text
+[0..3] MAGIC "PY32" | [4..5] 版本 | [6..7] CRC16 | [8..] Settings_t | 其余 0xFF
+```
+
+配置页 = 主 Flash 倒数第二页 `0x0800FF00`（128 B）。开机在 `LCD_Init` 前调 `APP_UI_SettingsLoad()`，
+校验 MAGIC / 版本 / CRC16 + 逐字段范围（含 NaN 防御）；不通过则写回默认值。
+
+### 关机
+
+长按 UP 显示 `POWEROFF` → 进 STOP：非必要引脚置模拟输入、PA0 拉低、只保留 SW_WKUP 唤醒；
+再按 SW_WKUP 开机。
+
+## 代码分层
+
+| 层 | 文件 | 职责 |
 | ---- | ---- | ---- |
-| 主控 | PY32F002B，24KB/3KB | PY32F003F18P6TU，64KB/8KB，最高 32MHz |
-| 时钟 | HSI 24MHz | HSI 24MHz（FLASH_LATENCY_0） |
-| LCD SPI | SCK=PB0，MOSI=PB7 | SCK=PA1，MOSI=PA2（SPI1 AF0） |
-| LCD DC | PA6 | PA3 |
-| LCD CS/RST/BLK | 均有独立引脚 | CS=PF1、RST=PF4（GPIO），BLK=PF0（TIM14_CH1 PWM 无级调光） |
-| 风扇 PWM | TIM1_CH1（PA0） | TIM3_CH2（PB5） |
-| INA226 I2C | PB3/PB4 | PB6/PB7 |
-| ADC | PB1(IN0)、PA4(IN2) | PA5(IN5)、PA4(IN4) |
-| 按键 | PB5/PB2/PC1，按下高有效 | PA12（板上 KEY）/PA6/PA7，按下高有效 |
-| LED | PA5 | PA0（板上 LED） |
-| 设备驱动 | py32f002b_* HAL/LL | py32f0xx_* HAL/LL |
+| 底层驱动 | `bsp_gpio / bsp_spi / bsp_i2c / bsp_adc / bsp_tim / bsp_flash` | 外设寄存器与 HAL 封装 |
+| 设备驱动 | `st7735.c`（含差分槽位）、`INA226.c` | 屏与电流计 |
+| 数据仓库 | `global.c/h` | `g_cfg` 配置 + `g_v/g_i/g_p/g_temp/g_wh/g_pwm` 测量量（预留多路） |
+| 工具 | `function.c` | 卡尔曼、分段校准、NTC 换算、风扇滞回、按键状态机、关机 |
+| 设置界面 | `app_ui.c` | 菜单表 + 四状态状态机 + 编辑 + Flash 组帧校验 |
+| 主界面呈现 | `theme.c` | 每主题一组 Frame/Values，格式化 + 差分 + 绘制 |
+| 调度 | `main.c` | 50ms / 1s / 每圈任务，采集与调度，不含绘制细节 |
 
-其余全部保持：ST7735 驱动接口 `LCD_* / ProgressBar_* / slot_*`、
-INA226 读取、卡尔曼/分段校准、三键短按/长按/双击状态机、
-长按关机进 STOP + SW_WKUP 按键唤醒、1s LED 闪烁与自动关机逻辑。
+## 按键
 
-## 引脚分配（TSSOP20，按 F18P 板原理图）
+| 按键 | 主界面 | 菜单 | 数值 / 选项编辑 |
+| ---- | ---- | ---- | ---- |
+| UP (SW_WKUP / PA12) | 长按关机进 STOP | 上移（长按连跳） | +步长 / 上一选项 |
+| SET (SW_FUNC / PA6) | 短按进设置界面 | 切换勾选 / 进入编辑 | 确认本项 |
+| DOWN (SW_MODE / PA7) | 无功能 | 下移（长按连跳） | -步长 / 下一选项 |
+
+## 硬件与引脚
 
 | 引脚 | 功能 | 配置 |
 | ---- | ---- | ---- |
-| PA1  | LCD_SCK  | SPI1_SCK（AF0） |
-| PA2  | LCD_MOSI | SPI1_MOSI（AF0） |
-| PA3  | LCD_DC   | GPIO 输出，默认低 |
-| PF1  | LCD_CS   | GPIO 输出，默认高 |
-| PF4  | LCD_RST  | GPIO 输出，默认高 |
-| PF0  | LCD_BLK  | TIM14_CH1（AF2）PWM 无级调光 |
-| PA0  | LED      | 板上 LED，1s 翻转 |
-| PA12 | SW_WKUP  | 板上 KEY，高电平有效，STOP 唤醒键 |
-| PA6  | SW_FUNC  | EXTI6，高电平有效 |
-| PA7  | SW_MODE  | EXTI7，高电平有效 |
-| PA5  | ADC_VCC  | ADC IN5（VCC 分压） |
-| PA4  | ADC_NTC  | ADC IN4（NTC 分压） |
-| PB5  | PWM_FAN  | TIM3_CH2（AF1），10kHz |
-| PB6  | I2C_SCL  | I2C1_SCL（AF6，开漏） |
-| PB7  | I2C_SDA  | I2C1_SDA（AF6，开漏） |
-| PA13 | SWDIO    | 调试 |
-| PA14 | SWCLK    | 调试 |
-| PF0/PF1 | LCD_BLK / LCD_CS | 复用（见上）；板上原为 24MHz 晶振，使用前需移除/断开晶振 |
-| PF2 | NRST | 复位 |
-| PF4 | LCD_RST | 复用（默认 BOOT0 功能未使用） |
+| PA1 / PA2 | LCD SCK / MOSI | SPI1（AF0） |
+| PA3 | LCD DC | GPIO 输出 |
+| PF1 / PF4 | LCD CS / RST | GPIO 输出，默认高 |
+| PF0 | LCD 背光 | TIM14_CH1（AF2）PWM 无级调光，10kHz |
+| PB6 / PB7 | INA226 SCL / SDA | I2C1（AF6），100kHz，地址 0x40 |
+| PA5 / PA4 | ADC VCC / NTC | ADC IN5 / IN4 |
+| PB5 | 风扇 PWM | TIM3_CH2（AF1），10kHz |
+| PA12 / PA6 / PA7 | UP / SET / DOWN | 高电平有效，PA12 兼 STOP 唤醒 |
+| PA0 | 电源使能 | 推挽输出，上电高、关机低 |
+| PA13 / PA14 | SWD 调试 | — |
+| PF2 | NRST | 保留复位 |
 
-屏幕接线：VCC、GND、SCK→PA1、SDA/MOSI→PA2、DC→PA3、
-CS→PF1、RST→PF4、BLK→PF0（背光 PWM 无级调光，长按 SW_FUNC 调节）。
-
-## 按键说明
-
-本板按键为**高电平有效**（内部下拉，按下接 VCC）：
-
-| 按键 | 短按 | 长按 | 双击 |
-| ---- | ---- | ---- | ---- |
-| SW_WKUP (PA12) | 翻转屏幕 | 关机进 STOP（再按开机） | 切换黑白背景 |
-| SW_FUNC (PA6) | LED 反馈 | 循环调节背光（本板为显示开关） | - |
-| SW_MODE (PA7) | 翻页 | 切换模式 | - |
-
-本工程已改为高电平有效；若需改回低电平有效，把 `Core/Inc/main.h` 的 `BTN_ACTIVE_LOW` 改回 `1`。
+硬件前提：PF0/PF1 在 F18P 板上原本接 24MHz 晶振，复用后需把晶振与两颗 22pF 电容移除/断开；
+工程已把 HSE 关闭，继续用 HSI 24MHz。
 
 ## 目录结构
 
 ```text
-PY32F003F18P6TU/
-├── Core/Inc, Core/Src   应用代码（移植自 PY32F002B_ST7735）
-├── Drivers/CMSIS         CMSIS 头文件 + py32f003x8 启动/系统文件
-├── Drivers/PY32F0xx_HAL_Driver  003/030 系列 HAL/LL 驱动（自包含）
-├── MDK-ARM/              Keil 工程（Project.uvprojx）
-├── Backup/               旧设备文件与参考 README 备份
-├── README.md / readme.txt
-└── .gitignore
+PY32F003F18P6TU_ST7735_V0.7/
+├── Core/Inc, Core/Src    应用代码
+├── Drivers/              CMSIS + PY32F0xx HAL/LL（自包含）
+├── MDK-ARM/              Keil 工程 Project.uvprojx
+├── Backup/               移植时保留的旧设备文件备份
+└── README.md / readme.txt / MDK-ARM/变量优化.txt（版本标记）
 ```
-
-工程自包含全部驱动，不依赖 SDK 目录，直接打开 MDK 工程即可编译。
 
 ## 编译与烧录
 
-1. Keil MDK（ARMCC V5）打开 `MDK-ARM/Project.uvprojx`；
-2. 需要安装 Puya 器件包 `Puya.PY32F0xx_DFP.1.1.0`
-   （资料包 `PY-MCU资料002_003_030/pack/MDK/Keil` 内有 .pack，双击安装；
-   若已装过旧版可覆盖升级）；
-3. 编译下载（SWD：PA13/PA14，NRST：PF2）。
+1. Keil MDK 打开 `MDK-ARM/Project.uvprojx`；
+2. 需要 Puya 器件包 `Puya.PY32F0xx_DFP.1.1.0`；
+3. 编译器 ARMCLANG（AC6），本工程当前为 0 Error / 0 Warning；
+4. SWD 下载：PA13/PA14，NRST：PF2。用 Keil 全片擦除下载会清掉配置页，首次上电回默认值。
 
-## 版本记录
+## 各版本快照
 
-| 版本 | 日期 | 说明 |
+| 目录 | 日期 | 说明 |
 | ---- | ---- | ---- |
-| V1.0 | 2026-08-29 | 从 PY32F002B_ST7735 移植到 PY32F003F18P6TU，完成引脚匹配与自包含工程 |
-| V1.1 | 2026-08-29 | PF0/PF1/PF4 允许复用：恢复 LCD CS/RST，背光改 TIM14_CH1(PF0) PWM 无级调光 |
+| Base | 2026-08-29 | 移植基线：F002→F003，引脚重排，功能不变 |
+| V0.1 | 2026-08-31 | 用户配置结构体迁移 |
+| V0.2 | 2026-09-02 | 二级设置菜单（勾选 / 数值编辑 / 保存回滚） |
+| V0.3 | 2026-09-02 | 菜单与值编辑长按连跳 + 增量重绘 |
+| V0.4 | 2026-09-02 | 掉电保存（内部 Flash + MAGIC/版本/CRC16） |
+| V0.5 | 2026-09-06 | PA0 改电源使能 + 关机低功耗 + THEME 选项式 |
+| V0.6 | 2026-09-06 | 主题编号化 + theme 模块拆分 + 采集/呈现分离 |
+| **V0.7** | **2026-09-08** | **命名规范对齐（g_/s_）（本版）** |
+
+## 后续可做（对照 260829需求.pdf）
+
+原始需求里以下功能**尚未实现**，当前版本只做了其中的单路 + 基础设置部分：
+
+- 三路显示（BAT / C1 / C2 / C3，其中 C 路走 3221）；
+- 采样电阻菜单项（BAT/C1/C2/C3，0.0010~0.010 ±0.0001）；
+- 电池串数 1-8S、单体最低 2.4-3.2V、单体最高 3.6-4.4V；
+- 显示切换 自动 / 手动（自动 5-10s 轮播，跳过电流 <10mA 的页面，手动掉电记忆当前页）；
+- 低电量报警 1%-30%（变色 / 闪烁 / 屏幕中间叠加提示）；
+- 瓦时重置（SW1 双击重置 BAT WH、主页 SW2 强制重置 C1/C2/C3 WH）；
+- 开启温度 35-65℃、开始转速 30-80℃ 两个可调项。
 
 ## License
 

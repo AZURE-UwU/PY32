@@ -1,26 +1,40 @@
-﻿================================================================================
-                        PY32F003F18P6TU 工程说明
+================================================================================
+              PY32F003F18P6TU + ST7735  V0.3 速查
 ================================================================================
 芯片：PY32F003F18P6TU（TSSOP20，64KB Flash / 8KB SRAM，最高 32MHz）
-版本：V1.1（2026-08-29，由 PY32F002B_ST7735 移植）
+本版：V0.3（2026-09-02）菜单长按加速 + 增量重绘
+上一版：V0.2（二级设置菜单）
 
-外设与引脚：
-  SPI1 -> ST7735S 0.96寸 160x80 横屏（SCK=PA1, MOSI=PA2, DC=PA3,
-          CS=PF1, RST=PF4）
-  I2C1 -> INA226（SCL=PB6, SDA=PB7, 100kHz, 地址 0x40）
-  ADC  -> IN5(PA5)=VCC 分压, IN4(PA4)=NTC 分压（扫描轮询）
-  TIM3 -> CH2(PB5)=风扇 PWM, 10kHz
-  TIM14-> CH1(PF0)=背光 PWM 无级调光, 10kHz
-  按键 -> SW_WKUP(PA12 板上KEY), SW_FUNC(PA6), SW_MODE(PA7)，高电平有效
-  LED  -> PA0（板上 LED）
+本版改了什么
+  - 长按连跳（菜单与值编辑共用）：按住前 2 秒慢档 200ms/步，
+    超过 2 秒快档 50ms/步；步进钳位，到边界不循环；
+  - 菜单翻项只重画旧行 / 新行（增量重绘），无整屏清屏闪烁；
+  - 数值编辑只刷新数值区域，数值未变时不重绘。
 
-按键：
-  SW_WKUP 短按转屏 / 长按关机进 STOP（再按开机）/ 双击换背景
-  SW_FUNC 短按 LED 反馈 / 长按调节背光
-  SW_MODE 短按翻页 / 长按切换模式
+菜单项（与 V0.2 相同）
+  FLIP / THEME / AUTO OFF / BLK / AOFF I / AOFF MIN / VBUS DIV / SAVE & EXIT / DISCARD
 
-编译：Keil 打开 MDK-ARM/Project.uvprojx，安装 Puya.PY32F0xx_DFP.1.1.0
-（资料包 pack/MDK/Keil 内），编译后 SWD（PA13/PA14）下载。
+本版还没有
+  - 掉电保存（V0.4 才有）；THEME 仍是勾选式（V0.5 改选项式）。
 
-详细说明见 README.md。
+按键
+  UP   (PA12)  主界面长按关机 ／ 菜单上移 ／ 值编辑 +步长   （均可长按连跳）
+  SET  (PA6)   主界面短按进设置 ／ 切换勾选或进入编辑 ／ 确认
+  DOWN (PA7)   主界面无功能 ／ 菜单下移 ／ 值编辑 -步长   （均可长按连跳）
+
+引脚（全系列通用）
+  显示屏 SPI1 : SCK=PA1  MOSI=PA2  DC=PA3  CS=PF1  RST=PF4
+  背光        : PF0 = TIM14_CH1 PWM，10kHz，无级调光
+  INA226 I2C1 : SCL=PB6  SDA=PB7，100kHz，地址 0x40
+  ADC         : PA5=IN5（VCC 分压）  PA4=IN4（NTC 分压）
+  风扇 PWM    : PB5 = TIM3_CH2，10kHz
+  板上 LED    : PA0（本版仍是 LED；V0.5 起改为电源使能）
+  调试 / 复位 : SWD=PA13/PA14，NRST=PF2
+
+编译
+  Keil MDK 打开 MDK-ARM/Project.uvprojx，需装 Puya.PY32F0xx_DFP.1.1.0；
+  编译器 ARMCLANG（AC6）；SWD 烧录 PA13/PA14，NRST PF2。
+
+文件版本
+  main.c V1.5 / app_ui.c V1.3 / global.c V1.2 / function.c V1.5 / st7735.c 1.2.1
 ================================================================================
