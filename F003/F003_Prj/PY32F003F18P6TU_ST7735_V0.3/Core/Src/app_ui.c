@@ -3,7 +3,7 @@
   * @file    app_ui.c
   * @author  Bowen (wbw20)
   * @date    2026-09-02
-  * @version V1.2
+  * @version V1.3
   * @hardware PY32F003F18P6TU 开发板（TSSOP20），ST7735S 160x80 横屏
   * @brief   设置菜单（二级界面）：UI 状态机 + 菜单渲染 + 数值编辑
   *
@@ -22,6 +22,8 @@
   *                     步进钳位，数值到顶/到底停在边界不循环。
   *   V1.2 (2026-09-02) 设置菜单新增长按连跳（与值编辑共用两档速度）；
   *                     选中/滚动改为增量重绘，翻项过程无整屏清屏闪烁。
+  *   V1.3 (2026-09-02) 值编辑步进改为仅刷新数值区域（ValueNumberDraw），
+  *                     不再整屏重绘；数值到边界不变时直接不重绘。
   ******************************************************************************
   */
 
@@ -80,9 +82,9 @@ static const MenuItem_t g_menu[] = {
 
 /* 长按连跳参数：慢档先粗定位，2 秒后转快档快速扫大范围。
    步进本身走 ValueStep 的钳位，数值到顶/到底停在边界，不会循环。 */
-#define REPEAT_SLOW_MS         200    /* 前 2 秒：每 200ms 一步（5 步/秒）  */
-#define REPEAT_FAST_MS          50    /* 2 秒后：每 50ms 一步（20 步/秒）   */
-#define REPEAT_SLOW_WINDOW_MS 2000    /* 慢档持续时长（从连跳开始算）       */
+#define REPEAT_SLOW_MS         100    /* 前 2 秒：每 200ms 一步（5 步/秒）  */
+#define REPEAT_FAST_MS          20    /* 2 秒后：每 50ms 一步（20 步/秒）   */
+#define REPEAT_SLOW_WINDOW_MS 1500    /* 慢档持续时长（从连跳开始算）       */
 
 /* UI 状态机运行态 ----------------------------------------------------*/
 volatile uint8_t UI_STATE = UI_MAIN;
@@ -96,6 +98,7 @@ static uint64_t  last_step    = 0;  /* 上一次步进时刻         */
 
 /* 渲染辅助前向声明：MenuMove/MenuActivate 定义在前，需提前可见 */
 static void MenuRowDraw(uint8_t idx, uint8_t r, uint8_t sel);
+static void ValueNumberDraw(void);
 
 /* ---------- 配置字段读写：统一按 float 域操作，写入时转回各自类型 ---------- */
 
@@ -230,11 +233,18 @@ static void MenuMove(int8_t dir)
 static void ValueStep(int8_t dir)
 {
     const MenuItem_t *it = &g_menu[edit_idx];
-    float v = CfgGetF(it->field) + (float)dir * it->step;
+    float old = CfgGetF(it->field);
+    float v   = old + (float)dir * it->step;
     if (v > it->max) { v = it->max; }
     if (v < it->min) { v = it->min; }
+
+    if (v == old)
+    {
+        return;              /* 已到边界：数值没变，不重绘（到顶/到底不循环） */
+    }
+
     CfgSetF(it->field, v);
-    FLAG = 1;
+    ValueNumberDraw();       /* 仅刷新数值区域，不整屏重绘 */
 }
 
 /* 清除连跳状态：释放按键或进出值编辑时调用，下次长按重新从慢档开始 */
@@ -450,7 +460,7 @@ static void MenuRowDraw(uint8_t idx, uint8_t r, uint8_t sel)
     char rhs[8] = {0};
     if (it->type == IT_CHECK)
     {
-        strcpy(rhs, CfgChecked(it->field) ? "[x]" : "[ ]");
+        strcpy(rhs, CfgChecked(it->field) ? "[v]" : "[ ]");
     }
     else if (it->type == IT_VALUE)
     {
@@ -506,13 +516,36 @@ static void MenuDraw(void)
     MenuScrollbarDraw();
 }
 
-static void ValueDraw(void)
+/* 仅刷新数值区域：抹掉数字带后重画大数值+单位，不动项目名/分隔线/底部提示。
+   长按连跳每步只刷这一块，避免整屏清屏闪烁并节省 SPI 传输。 */
+static void ValueNumberDraw(void)
 {
     const MenuItem_t *it = &g_menu[edit_idx];
     uint16_t bg  = g_cfg.theme;
     uint16_t fg  = MenuFg(bg);
     uint16_t big = (bg == BLACK) ? WHITE : BLACK;   /* 大数值用反色保证对比度 */
     char buf[8];
+
+    /* 数字带：24x12 字高 24，覆盖 y=28~51 */
+    LCD_DrawRect_Fill(0, 28, LCD_W, 24, bg);
+
+    formatFloatToStr(CfgGetF(it->field), buf, 5, it->prec);
+    TrimLeadingZeros(buf);
+    uint16_t w = (uint16_t)(strlen(buf) * 12U);
+    uint16_t x = (uint16_t)((LCD_W - w) / 2U);
+    LCD_ShowString(h24w12_sample, h24w12, 24, 12, x, 28, big, bg, buf);
+
+    if (it->unit[0] != '\0')
+    {
+        LCD_ShowString(h16w8_sample, h16w8, 16, 8, (uint16_t)(x + w + 4), 32, fg, bg, (char *)it->unit);
+    }
+}
+
+static void ValueDraw(void)
+{
+    const MenuItem_t *it = &g_menu[edit_idx];
+    uint16_t bg = g_cfg.theme;
+    uint16_t fg = MenuFg(bg);
 
     LCD_Clear(bg);
 
@@ -522,18 +555,8 @@ static void ValueDraw(void)
     /* 分隔线 */
     LCD_DrawRect_Fill(0, 16, LCD_W, 1, fg);
 
-    /* 大号数值（24x12），水平居中 */
-    formatFloatToStr(CfgGetF(it->field), buf, 5, it->prec);
-    TrimLeadingZeros(buf);
-    uint16_t w = (uint16_t)(strlen(buf) * 12U);
-    uint16_t x = (uint16_t)((LCD_W - w) / 2U);
-    LCD_ShowString(h24w12_sample, h24w12, 24, 12, x, 28, big, bg, buf);
-
-    /* 单位（紧贴数值右侧） */
-    if (it->unit[0] != '\0')
-    {
-        LCD_ShowString(h16w8_sample, h16w8, 16, 8, (uint16_t)(x + w + 4), 32, fg, bg, (char *)it->unit);
-    }
+    /* 大数值 + 单位（步进时由 ValueNumberDraw 单独刷新） */
+    ValueNumberDraw();
 
     /* 底部操作提示 */
     LCD_ShowString(h16w8_sample, h16w8, 16, 8, 2,   64, fg, bg, "SET=OK");
